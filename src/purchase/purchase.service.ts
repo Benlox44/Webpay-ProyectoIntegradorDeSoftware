@@ -2,6 +2,7 @@ import { Injectable, HttpException, HttpStatus } from '@nestjs/common';
 import axios, { AxiosResponse } from 'axios';
 import * as jwt from 'jsonwebtoken';
 import * as amqp from 'amqplib/callback_api';
+import * as nodemailer from 'nodemailer';
 
 export interface WebpayResponse {
   url: string;
@@ -23,8 +24,11 @@ export class PurchaseService {
     try {
       const decoded: any = jwt.verify(token, 'your_secret_key');
       const userId = decoded.id;
+      console.log('User ID from token:', userId);
 
-      // Lógica de Webpay
+      const userDetails = await this.getUserDetails(userId);
+      console.log('Detalles del usuario obtenidos:', userDetails);
+
       const buyOrder = Math.floor(Math.random() * 100000);
       const sessionId = Math.floor(Math.random() * 100000);
       const returnUrl = `http://localhost:3003/purchase/return`;
@@ -43,6 +47,7 @@ export class PurchaseService {
       const response = await this.getWs(data, method, type, endpoint);
       return response;
     } catch (error) {
+      console.error('Error decodificando el token:', error);
       throw new HttpException('Token inválido o expirado', HttpStatus.UNAUTHORIZED);
     }
   }
@@ -59,13 +64,67 @@ export class PurchaseService {
     const response: WebpayReturnResponse | null = await this.getWs(null, method, type, endpoint);
 
     if (response && response.status === 'AUTHORIZED') {
-      // Lógica para interactuar con RabbitMQ y enviar correos, si es necesario
-      // Aquí debes implementar la lógica de RabbitMQ para obtener el correo y nombre del usuario y enviar el correo
+      const userDetails = await this.getUserDetails(Number(userId));
+      console.log('Detalles del usuario para enviar correo:', userDetails);
+
+      // Lógica para enviar el correo electrónico al usuario
+      await this.sendEmail(userDetails.email, userDetails.name);
 
       return true; // Indicar que la transacción fue autorizada
     } else {
       return false; // Indicar que la transacción no fue autorizada
     }
+  }
+
+  private async getUserDetails(userId: number): Promise<any> {
+    return new Promise((resolve, reject) => {
+      amqp.connect('amqp://localhost', (error0, connection) => {
+        if (error0) {
+          reject(error0);
+          return;
+        }
+
+        connection.createChannel((error1, channel) => {
+          if (error1) {
+            reject(error1);
+            return;
+          }
+
+          const queue = 'user_details_queue';
+          const correlationId = this.generateUuid();
+
+          channel.assertQueue('', { exclusive: true }, (error2, q) => {
+            if (error2) {
+              reject(error2);
+              return;
+            }
+
+            channel.consume(
+              q.queue,
+              (msg) => {
+                if (msg.properties.correlationId === correlationId) {
+                  const userDetails = JSON.parse(msg.content.toString());
+                  resolve(userDetails);
+                  setTimeout(() => {
+                    connection.close();
+                  }, 500);
+                }
+              },
+              { noAck: true },
+            );
+
+            channel.sendToQueue(queue, Buffer.from(JSON.stringify({ userId })), {
+              correlationId,
+              replyTo: q.queue,
+            });
+          });
+        });
+      });
+    });
+  }
+
+  private generateUuid() {
+    return Math.random().toString() + Math.random().toString() + Math.random().toString();
   }
 
   private async getWs(data: any, method: string, type: string, endpoint: string): Promise<any> {
@@ -89,6 +148,30 @@ export class PurchaseService {
     } catch (error) {
       console.error('Error al conectar con Webpay:', error);
       return null;
+    }
+  }
+
+  private async sendEmail(email: string, name: string): Promise<void> {
+    const transporter = nodemailer.createTransport({
+      service: 'gmail',
+      auth: {
+        user: 'NetDesignChile@gmail.com',
+        pass: 'qnbr ypdy xupo kczi',
+      },
+    });
+
+    const mailOptions = {
+      from: 'NetDesignChile@gmail.com',
+      to: email,
+      subject: 'Compra exitosa',
+      text: `Hola ${name},\n\nTu compra ha sido realizada con éxito. ¡Gracias por confiar en nosotros!\n\nSaludos,\nTu equipo.`,
+    };
+
+    try {
+      await transporter.sendMail(mailOptions);
+      console.log(`Correo enviado a ${email}`);
+    } catch (error) {
+      console.error('Error al enviar el correo:', error);
     }
   }
 }
