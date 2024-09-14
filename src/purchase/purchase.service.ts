@@ -18,6 +18,7 @@ export class PurchaseService {
   private userEmail: string | null = null;
   private userName: string | null = null;
   private courseIds: number[] = [];
+  private userId: number | null = null;
 
   async initTransaction(authHeader: string, totalAmount: number): Promise<WebpayResponse | null> {
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -27,10 +28,10 @@ export class PurchaseService {
     const token = authHeader.split(' ')[1];
     try {
       const decoded: any = jwt.verify(token, 'your_secret_key');
-      const userId = decoded.id;
-      console.log('User ID from token:', userId);
+      this.userId = decoded.id;
+      console.log('User ID from token:', this.userId);
 
-      const userDetails = await this.getUserDetails(userId);
+      const userDetails = await this.getUserDetails(this.userId);
       console.log('Detalles del usuario obtenidos:', userDetails);
 
       this.userEmail = userDetails.email;
@@ -60,51 +61,51 @@ export class PurchaseService {
     }
   }
 
-  async returnTransaction(token: string, userId: string): Promise<boolean> {
+  async returnTransaction(token: string): Promise<boolean> {
     if (!token) {
       throw new HttpException('No se recibió el token de Webpay', HttpStatus.BAD_REQUEST);
     }
-  
+
     const method = 'PUT';
     const type = 'sandbox';
     const endpoint = `/rswebpaytransaction/api/webpay/v1.0/transactions/${token}`;
-  
+
     const response: WebpayReturnResponse | null = await this.getWs(null, method, type, endpoint);
-  
+
     if (response && response.status === 'AUTHORIZED') {
-      if (this.userEmail && this.userName && this.courseIds.length > 0) {
+      if (this.userEmail && this.userName && this.courseIds.length > 0 && this.userId) {
         console.log('Detalles del usuario para enviar correo:', {
           email: this.userEmail,
           name: this.userName,
           courseIds: this.courseIds,
         });
-  
+
         try {
           const courseDetails = await this.getCourseTitles(this.courseIds);
-  
+
           const courseTitles = courseDetails.map(course => course.title);
           const totalPrice = courseDetails.reduce((sum, course) => sum + course.price, 0);
-  
+
           console.log('Course Titles:', courseTitles);
           console.log('Total Price:', totalPrice);
-  
+
           await this.sendEmail(this.userEmail, this.userName, courseTitles, totalPrice);
+
+          await this.sendPurchaseToUsers(this.userId, this.courseIds);
         } catch (error) {
           console.error('Error al obtener los títulos de los cursos o enviar el correo:', error);
-  
           throw new HttpException('Error al obtener los títulos de los cursos. Por favor, intenta nuevamente más tarde.', HttpStatus.SERVICE_UNAVAILABLE);
         }
       } else {
         console.error('No se encontraron los detalles del usuario o el carrito almacenados.');
         throw new HttpException('Detalles del usuario o carrito no disponibles', HttpStatus.INTERNAL_SERVER_ERROR);
       }
-  
+
       return true;
     } else {
       return false;
     }
   }
-  
 
   private async getUserDetails(userId: number): Promise<any> {
     return new Promise((resolve, reject) => {
@@ -134,8 +135,8 @@ export class PurchaseService {
               (msg) => {
                 if (msg.properties.correlationId === correlationId) {
                   const userDetails = JSON.parse(msg.content.toString());
-                  console.log('User ID from getUserDetails:', userId); // Log del userId
-                  console.log('Course IDs from getUserDetails:', userDetails.courseIds); // Log de los courseIds
+                  console.log('User ID from getUserDetails:', userId);
+                  console.log('Course IDs from getUserDetails:', userDetails.courseIds);
                   resolve(userDetails);
                   setTimeout(() => {
                     connection.close();
@@ -246,7 +247,6 @@ export class PurchaseService {
       },
     });
   
-    // Crear una lista con puntos para los títulos de los cursos
     const courseList = courseTitles.map(title => `• ${title}`).join('\n');
   
     const mailOptions = {
@@ -262,5 +262,39 @@ export class PurchaseService {
     } catch (error) {
       console.error('Error al enviar el correo:', error);
     }
+  } 
+
+  private async sendPurchaseToUsers(userId: number, courseIds: number[]): Promise<void> {
+    return new Promise((resolve, reject) => {
+      amqp.connect('amqp://localhost', (error0, connection) => {
+        if (error0) {
+          console.error('Error al conectar a RabbitMQ:', error0);
+          reject(error0);
+          return;
+        }
+  
+        connection.createChannel((error1, channel) => {
+          if (error1) {
+            console.error('Error al crear el canal de RabbitMQ:', error1);
+            reject(error1);
+            return;
+          }
+  
+          const queue = 'purchase_to_user_queue';
+          const message = { userId, courseIds };
+  
+          channel.assertQueue(queue, { durable: true });
+          channel.sendToQueue(queue, Buffer.from(JSON.stringify(message)), {
+            persistent: true,
+          });
+  
+          console.log('Mensaje enviado a la cola de usuarios:', message);
+          resolve();
+          setTimeout(() => {
+            connection.close();
+          }, 500);
+        });
+      });
+    });
   }  
 }
