@@ -1,15 +1,18 @@
-import { Controller, Post, Body, Headers, HttpException, HttpStatus, Res } from '@nestjs/common';
+import { Controller, Post, Body, Get, Request, UseGuards, HttpException, HttpStatus, Res } from '@nestjs/common';
 import { PurchaseService, WebpayResponse } from './purchase.service';
 import { Response } from 'express';
+import { AuthGuard } from '../auth/auth.guard'; 
 
 @Controller('purchase')
 export class PurchaseController {
   constructor(private readonly purchaseService: PurchaseService) {}
 
+  @UseGuards(AuthGuard)
   @Post('init')
-  async initTransaction(@Headers('authorization') authHeader: string, @Body('totalAmount') totalAmount: number): Promise<WebpayResponse> {
+  async initTransaction(@Request() req, @Body('totalAmount') totalAmount: number): Promise<WebpayResponse> {
     try {
-      const response = await this.purchaseService.initTransaction(authHeader, totalAmount);
+      const userId = req.user.id;
+      const response = await this.purchaseService.initTransaction(userId, totalAmount);
       return response;
     } catch (error) {
       throw new HttpException(error.message, error.status || HttpStatus.INTERNAL_SERVER_ERROR);

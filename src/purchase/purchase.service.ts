@@ -1,8 +1,8 @@
 import { Injectable, HttpException, HttpStatus } from '@nestjs/common';
 import axios, { AxiosResponse } from 'axios';
-import * as jwt from 'jsonwebtoken';
 import * as amqp from 'amqplib/callback_api';
 import * as nodemailer from 'nodemailer';
+import { ConfigService } from '@nestjs/config';
 
 export interface WebpayResponse {
   url: string;
@@ -20,15 +20,11 @@ export class PurchaseService {
   private courseIds: number[] = [];
   private userId: number | null = null;
 
-  async initTransaction(authHeader: string, totalAmount: number): Promise<WebpayResponse | null> {
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      throw new HttpException('No se proporcionó un token válido', HttpStatus.UNAUTHORIZED);
-    }
+  constructor(private readonly configService: ConfigService) {}
 
-    const token = authHeader.split(' ')[1];
+  async initTransaction(userId: number, totalAmount: number): Promise<WebpayResponse | null> {
     try {
-      const decoded: any = jwt.verify(token, '8F!@kl23h4asP@Q1Ndfg85fweR$fgq9w%$TkdM33nfL9^s8Qz');
-      this.userId = decoded.id;
+      this.userId = userId;
       console.log('User ID from token:', this.userId);
 
       const userDetails = await this.getUserDetails(this.userId);
@@ -56,8 +52,8 @@ export class PurchaseService {
       const response = await this.getWs(data, method, type, endpoint);
       return response;
     } catch (error) {
-      console.error('Error decodificando el token:', error);
-      throw new HttpException('Token inválido o expirado', HttpStatus.UNAUTHORIZED);
+      console.error('Error al iniciar la transacción:', error);
+      throw new HttpException('Error iniciando la transacción', HttpStatus.INTERNAL_SERVER_ERROR);
     }
   }
 
@@ -216,8 +212,8 @@ export class PurchaseService {
 
   private async getWs(data: any, method: string, type: string, endpoint: string): Promise<any> {
     const baseUrl = type === 'live' ? 'https://webpay3g.transbank.cl' : 'https://webpay3gint.transbank.cl';
-    const TbkApiKeyId = '597055555532';
-    const TbkApiKeySecret = '579B532A7440BB0C9079DED94D31EA1615BACEB56610332264630D42D0A36B1C';
+    const TbkApiKeyId = this.configService.get<string>('TBK_API_KEY_ID');
+    const TbkApiKeySecret = this.configService.get<string>('TBK_API_KEY_SECRET');
 
     try {
       const response: AxiosResponse<any> = await axios({
@@ -242,8 +238,8 @@ export class PurchaseService {
     const transporter = nodemailer.createTransport({
       service: 'gmail',
       auth: {
-        user: 'NetDesignChile@gmail.com',
-        pass: 'qnbr ypdy xupo kczi',
+        user: this.configService.get<string>('GMAIL_USER'),
+        pass: this.configService.get<string>('GMAIL_PASS'),
       },
     });
   
