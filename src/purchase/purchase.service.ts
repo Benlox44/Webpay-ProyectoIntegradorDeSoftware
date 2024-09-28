@@ -27,7 +27,7 @@ export class PurchaseService {
 
     const token = authHeader.split(' ')[1];
     try {
-      const decoded: any = jwt.verify(token, 'your_secret_key');
+      const decoded: any = jwt.verify(token, '8F!@kl23h4asP@Q1Ndfg85fweR$fgq9w%$TkdM33nfL9^s8Qz');
       this.userId = decoded.id;
       console.log('User ID from token:', this.userId);
 
